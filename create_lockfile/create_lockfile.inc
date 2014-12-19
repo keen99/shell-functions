@@ -42,5 +42,5 @@ create_lockfile() {
   # Automatically clean up the lock file
   # this would be better with add-to-trap logic...
   trap 'echo; echo "Removing lockfile: ${LOCKFILE}"; rm -f ${LOCKFILE}' EXIT SIGTERM
-  echo_success 2>/dev/null|| echo "Success"
+  (echo_success 2>/dev/null && echo)|| echo "Success"
 }
