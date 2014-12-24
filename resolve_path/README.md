@@ -1,5 +1,8 @@
 
-Ever have a symlink that you want the real path for?  Or a worse, a relative symlink?
+Ever have a symlink that you want the real path for?  Or a worse, a relative symlink?  
+
+On linux, you can use "readlink -f", sometimes.  But that's not portable at all, certainly not to the BSDs.
+
 
 here's a classic example, thanks to brew:
 
