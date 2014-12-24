@@ -11,7 +11,7 @@ resolve_path() {
 	local npath=""
 	local obase=$(basename "$opath")
 	local odir=$(dirname "$opath")
-	if [ -L "$opath" ]
+	if [[ -L "$opath" ]]
 	then
 	#it's a link.
 	#file or directory, we want to cd into it's dir
@@ -19,14 +19,14 @@ resolve_path() {
 	#then extract where the link points.
 		npath=$(readlink "$obase")
 		#have to -L BEFORE we -f, because -f includes -L :(
-		if [ -L $npath ]
+		if [[ -L $npath ]]
 		 then
 		#the link points to another symlink, so go follow that.
 			resolve_path "$npath"
 			#and finish out early, we're done.
 			return $?
 			#done
-		elif [ -f $npath ]
+		elif [[ -f $npath ]]
 		#the link points to a file.
 		 then
 			#get the dir for the new file
@@ -36,7 +36,7 @@ resolve_path() {
 		 	ndir=$(pwd -P)
 		 	retval=0
 		 	#done
-		elif [ -d $npath ]
+		elif [[ -d $npath ]]
 		 then
 		#the link points to a directory.
 			cd "$npath"
@@ -45,23 +45,23 @@ resolve_path() {
 			#done
 		else
 			echo "$FUNCNAME: ERROR: unknown condition inside link!!" >&2
-			echo "opath [ $opath ]" >&2
-			echo "npath [ $npath ]" >&2
+			echo "opath [[ $opath ]]" >&2
+			echo "npath [[ $npath ]]" >&2
 			return 1
 		fi
 	else
-		if ! [ -e "$opath" ]
+		if ! [[ -e "$opath" ]]
 		 then
 			echo "$FUNCNAME: $opath: No such file or directory" >&2
 			return 1
 			#and break early
-		elif [ -d "$opath" ]
+		elif [[ -d "$opath" ]]
 		 then 
 			cd "$opath"
 			ndir=$(pwd -P)
 			retval=0
 			#done
-		elif [ -f "$opath" ]
+		elif [[ -f "$opath" ]]
 		 then
 		 	cd $odir
 		 	ndir=$(pwd -P)
@@ -70,13 +70,13 @@ resolve_path() {
 		 	#done
 		else
 			echo "$FUNCNAME: ERROR: unknown condition outside link!!" >&2
-			echo "opath [ $opath ]" >&2
+			echo "opath [[ $opath ]]" >&2
 			return 1
 		fi
 	fi
 	#now assemble our output
 	echo -n "$ndir"
-	if [ "x${nbase:=}" != "x" ]
+	if [[ "x${nbase:=}" != "x" ]]
 	 then
 	 	echo "/$nbase"
 	else 
