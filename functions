@@ -1,0 +1,1084 @@
+#!/usr/bin/env bash
+# -*-Shell-script-*-
+#
+# Utility functions used by the deployment scripts
+#
+
+### NOTE- never use ./ ~ ~tw/ $(dirname 0) or anything like it to reference scripts or configs.
+### this lets us set the logic in only 1 place to determine where these are for better flexibility
+if cd "$(dirname $0)"; then
+	ENV_SCRIPT_DIR="${PWD}"
+	ENV_CONFIG_DIR="${PWD}/../conf_env*/"
+	ENV_INCLUDE_DIR="${PWD}/../include/"
+	cd "$OLDPWD" || exit 1
+else
+	exit 1
+fi
+
+include_env_file() {
+	if [ "x$1" != "x" ]
+	 then
+		LAYER="$1"
+	fi
+	if [ -z "${ENV}" -o -z "${LAYER}" ]; then
+		error "ENV and/or LAYER are not set, exiting"
+		exit 1
+	fi
+	if [ -e $ENV_CONFIG_DIR/${ENV}_cfg ]; then
+		. $ENV_CONFIG_DIR/${ENV}_cfg ${LAYER}
+	else
+		error "$ENV_CONFIG_DIR/${ENV}_cfg is missing!"
+		exit 1
+	fi
+}
+
+
+#who gets emails out of this thing?
+EMAILS="draistrick@ea.com,agrabish@ea.com,nasharma@ea.com"
+
+#the user we usually deploy as.  overrideable at env/layer
+DEPLOY_USER="tw"
+
+# Error return codes
+E_BAD_ARGS=1
+E_BAD_LAYER=1
+E_NO_ENV=2
+
+E_LOCKED=10
+E_NO_P4=12
+E_P4_FAILURE=13
+
+E_BAD_RSYNC=100
+E_BAD_SSH=101
+E_BAD_SCP=102
+E_BAD_CHMOD=103
+E_BAD_MKTEMP=104
+E_BAD_MKDIR=105
+E_BAD_CP=106
+E_BAD_TAR=107
+E_BAD_MAKE=108
+E_BAD_CD=109
+E_BAD_BUILD=110
+E_BAD_DEPLOY=111
+E_BAD_ANT=112
+E_BAD_XMLLINT=113
+
+E_BAD_RELOAD=200
+
+# Commands
+P4=/usr/local/bin/p4
+
+# Output modifiers
+#no color if we don't have a tty (ie, we're cron)
+if tty -s ; then
+    BOOTUP=color
+else
+    BOOTUP=nocolor
+fi
+RES_COL=80
+#really, we want to move to column 80?  this makes for some ugly chaos.  so lets not
+#until someone spends some real quality time in here...
+##MOVE_TO_COL="echo -en \\033[${RES_COL}G"
+MOVE_TO_COL=""
+SETCOLOR_SUCCESS="echo -en \\033[1;32m"
+SETCOLOR_FAILURE="echo -en \\033[1;31m"
+SETCOLOR_WARNING="echo -en \\033[0;35m"
+SETCOLOR_NOTICE="echo -en \\033[0;34m"
+SETCOLOR_NORMAL="echo -en \\033[0;39m"
+LOGLEVEL=1
+
+echo_success() {
+  [ "$BOOTUP" = "color" ] && $MOVE_TO_COL
+  echo -n "["
+  [ "$BOOTUP" = "color" ] && $SETCOLOR_SUCCESS
+  echo -n $"   OK  "
+  [ "$BOOTUP" = "color" ] && $SETCOLOR_NORMAL
+  echo -n "]"
+  echo -ne "\r\n"
+  return 0
+}
+
+echo_failure() {
+  [ "$BOOTUP" = "color" ] && $MOVE_TO_COL
+  echo -n "["
+  [ "$BOOTUP" = "color" ] && $SETCOLOR_FAILURE
+  echo -n $" FAILED"
+  [ "$BOOTUP" = "color" ] && $SETCOLOR_NORMAL
+  echo -n "]"
+  echo -ne "\r\n"
+  return 1
+}
+
+echo_passed() {
+  [ "$BOOTUP" = "color" ] && $MOVE_TO_COL
+  echo -n "["
+  [ "$BOOTUP" = "color" ] && $SETCOLOR_WARNING
+  echo -n $" PASSED"
+  [ "$BOOTUP" = "color" ] && $SETCOLOR_NORMAL
+  echo -n "]"
+  echo -ne "\r\n"
+  return 1
+}
+
+echo_warning() {
+  [ "$BOOTUP" = "color" ] && $MOVE_TO_COL
+  echo -n "["
+  [ "$BOOTUP" = "color" ] && $SETCOLOR_WARNING
+  echo -n $"WARNING"
+  [ "$BOOTUP" = "color" ] && $SETCOLOR_NORMAL
+  echo -n "]"
+  echo -ne "\r\n"
+  return 1
+}
+
+error() {
+  MSG=$@
+  [ "$BOOTUP" = "color" ] && $SETCOLOR_FAILURE
+  echo -n "ERROR: "
+  [ "$BOOTUP" = "color" ] && $SETCOLOR_NORMAL
+  echo -n ${MSG}
+  echo -ne "\r\n"
+  return 0
+}
+
+warning() {
+  MSG=$@
+  [ "$BOOTUP" = "color" ] && $SETCOLOR_WARNING
+  echo -n "WARNING: "	
+  [ "$BOOTUP" = "color" ] && $SETCOLOR_NORMAL
+  echo -n ${MSG}
+  echo -ne "\r\n"
+  return 0
+}
+
+
+
+notice() {
+  MSG=$@
+  [ "$BOOTUP" = "color" ] && $SETCOLOR_NOTICE
+  echo -n "NOTICE: "
+  [ "$BOOTUP" = "color" ] && $SETCOLOR_NORMAL
+  echo -n ${MSG}
+  echo -ne "\r\n"
+  return 0
+}
+
+trapemail() {
+  (
+	echo "The $0 script did not run to completion!"
+	echo "${MYSELF}: line ${LASTLINE}: exit status of last command: ${LASTERR}"
+	echo "Deploy server $(hostname -s) at $(date)"
+	echo; echo
+	[ -f ${runlogoutput:="thisisnotafilefilefile"} ] && cat $runlogoutput 
+	) | mail -s "FAIL! $(basename $0) ${ENV:=noenv} deploy FAIL" $EMAILS
+	[ -f ${runlogoutput:="thisisnotafilefilefile"} ] && rm $runlogoutput 
+}
+
+doerrmsg() {
+	MYSELF="$0"               # equals to my script name
+	LASTLINE="$1"            # argument 1: last line of error occurence
+	LASTERR="$2"             # argument 2: error code of last command
+	LASTCMD="$3"
+## note that this doesn't really exit properly for backgrounded tasks.....probably need some other 
+## sort of callback mechanism for those.  since they're subshells, they're out of var scope..
+
+	error "ERROR!"
+	error "ERROR!"
+	error "ERROR!"
+	error "ERROR!"
+	error "The $(basename $0) script did not run to completion - exit ${LASTERR}!"
+	error "${MYSELF}: line ${LASTLINE}: exit status of last command: ${LASTERR}"
+	error "Last command: [$LASTCMD]"
+	error "ERROR!"
+	error "ERROR!"
+	trapemail
+	exit ${LASTERR}
+}
+
+
+cond_trap_on() {
+	#if it's be called once, then turn it back on. otherwise dont
+	if [ ${TRAPON:=0} = 1 ]
+	 then
+		trap_on
+	fi
+}
+
+trap_on() {
+	#save this for later.
+	[[ -z ${PARENTPID:=} ]] && export PARENTPID=$$
+	export TRAPON=1
+ #this could be dangerous here
+ # set -u # Trigger error when expanding unset variables.
+  set -e  #exit on error
+  # Let shell functions inherit ERR trap.  Same as `set -E'.
+  set -o errtrace
+	# If the shell bails out with an error, propogate an error status to the caller
+	#  Trap non-normal exit signals: 1/HUP, 2/INT, 3/QUIT, 15/TERM, ERR
+	#  NOTE1: - 9/KILL cannot be trapped.
+	#+        - 0/EXIT isn't trapped because:
+	#+          - with ERR trap defined, trap would be called twice on error
+	#+          - with ERR trap defined, syntax errors exit with status 0, not 2
+	#  NOTE2: Setting ERR trap does implicit `set -o errexit' or `set -e'.
+  trap 'doerrmsg ${LINENO} $? "$BASH_COMMAND"' 1 3 15 ERR
+  trap 'sigint_trap' INT
+  trap 'exit_trap' EXIT
+  return 0
+}
+
+exit_trap() {
+	#for job in `jobs -p`
+	# do
+	#	printnotice "Killing backgrounded $job"
+	#	printnotice "$(ps -p $job|tail -n1)"
+	#	kill $job
+	#	wait $job || true
+	#done	
+	printnotice "And exit!"
+}
+sigint_trap() {
+	##this doesn't work well.
+	printwarning "hey, you pressed control cee"
+	#for job in `jobs -p`
+	# do
+	#	printnotice "Killing backgrounded $job"
+	#	printnotice "$(ps -p $job|tail -n1)"
+	#	kill $job
+	#	wait $job || true
+	#done
+}
+
+trap_off() {
+	#make it conditional so we dont unset traps not created by trap_on
+	if [ ${TRAPON:=0} = 1 ]
+	 then
+	  # This has been fixed with the addition of set -o errtrace in trap_on
+	  set +e  #dont unset E here, we want to keep that one around.
+	  #set +u #unsafe? not here?
+	  trap - 1 2 3 15 ERR
+	  return 0
+	fi
+}
+  
+  
+p4sync() {
+	##no dry-run support yet ($TEST_ARGS) or only by luck
+	## add force sync, and no sync, someday, and p4args and testargs
+	if [ ${SYNC:=1} -eq 1 ]; then
+		if [ ${VERBOSE} -eq 1 ]; then
+			VERBARGS="--verbose"
+		fi
+		print "Now checking to see if $LAYER needs to sync."
+		printtest ${ENV_SCRIPT_DIR}/p4_sync --environment ${ENV} --output \
+		 ${SRC}/changelist.txt --layer ${LAYER} ${VERBARGS:=""} "${P4ARGS:=}" \
+		 ${TEST_ARGS:=} 
+		results=$?
+		# Look for an unexpected return code from p4sync
+		if [ ${results} -ne 0 ]; then
+			printerr "p4 sync error..."
+			exit ${results}
+		fi
+	else
+		printnotice "Skipping p4 sync"
+	fi
+}  
+  
+
+#we really need a timer function! 
+timeverbose() {
+	if [ $VERBOSE = 1 ]
+	 then
+		SECONDS=0
+		time -p "$@"
+		exit=$?
+		notice "Elasped time: $SECONDS seconds."
+		return $exit
+	else
+		"$@"
+		return $?
+	fi
+}
+
+ 
+##note: not so good at wrapping function calls though. they bork at the eval..
+wrapoutput() {
+# usage - wrapthings withwhat runwhat
+# wraps the output of the command given with the tag that's given
+# will exec in a subshell, so be warned about variable scoping coming back out.
+# great for sshes though
+#there could be some quote goofys going on still
+	wrap=$1
+	shift
+	##echo wrapping $wrap around "$@"
+	set -o pipefail #we want the eval, not the while read...
+	eval $@ | while read i
+	 do
+	  echo "$wrap: $i";
+	done
+	local exit=$?
+	set +o pipefail
+	return $exit
+}  
+
+  
+# Ensure only one instance is running at a time
+create_lockfile() {
+  	LOCKFILE="/tmp/.busy_$(basename $0)_${ENV}"   # generic lockfile per process, environment, and pid so we dont need config for this
+  												  # could be per layer +- procname...
+	if (set -C; echo $$ > ${LOCKFILE} ) 2> /dev/null; then
+		print -n "Creating lockfile: ${LOCKFILE}      "
+	else
+		pid=$(cat ${LOCKFILE})
+		# This is as specific of a test as we can get....REALLY!!!!
+		if ps hp $pid > /dev/null; then
+			#running
+			#is it us and not something else?
+			if ps hp $pid|grep -q "$(basename $0).*$ENV"; then
+				#we're running, and it's us, lets test the age
+				if [ -n "$(find ${LOCKFILE} -mmin +30)" ]; then
+					print
+					# If we find that a process has been running for too long (lockfile exists for 30 minutes or more), kill the process and the lockfile
+					printnotice "Found lockfile for process that has been running too long (30+ minutes).  Killing process and removing lockfile: ${LOCKFILE}"
+					#quicky
+					printnotice "Found lockfile for process that has been running too long (30+ minutes).  Killing process and removing lockfile: ${LOCKFILE}" | mail -s "STUCK LOCK $ENV ${LOCKFILE}" $EMAILS		
+					echo
+					#trap_off
+					kill -9 ${pid}
+					#trap_on				
+				else
+					print
+					printnotice "Cannot create Lockfile: $(basename $0) is already running [$(cat ${LOCKFILE})]"
+					# Why are we exiting with an error if we are already running
+					#exit $E_LOCKED
+					exit 0		
+				fi
+			fi
+		fi
+		#the pid isn't ours, test for stuck.
+		print
+		printnotice "Found lockfile for process that is no longer running.  Removing lockfile: ${LOCKFILE}"
+		echo
+		rm -f ${LOCKFILE}
+		print -n "Creating lockfile: ${LOCKFILE}      "
+		(set -C; echo $$ > ${LOCKFILE} ) 2> /dev/null
+	fi
+	# Automatically clean up the lock file
+	trap 'echo; print "Removing lockfile: ${LOCKFILE}"; rm -f ${LOCKFILE}' EXIT SIGTERM
+	echo_success
+}
+
+# An easy user-feedback for use with commands that have their
+# output redirected to /dev/null
+spinner() {
+#noisy in log files!
+  PROC=$1
+
+  # Allow a ^C to break out of the spinner
+  trap "kill ${PROC} ; return 1" INT
+
+  while [ -d /proc/$PROC ];
+  do
+    echo -ne '/\b'  ; sleep 1
+    echo -ne '-\b'  ; sleep 1
+    echo -ne '\\\b' ; sleep 1
+    echo -ne '|\b'  ; sleep 1
+  done
+  return 0
+}
+
+spinner2() {
+#a spinner that can be called inside a looping job, to substitute for output or ........ etc
+#be warned about log files, tho...
+	[ ${spinnercount:=1} = 1 ] && echo -ne '/\b'
+	[ $spinnercount = 2 ] && echo -ne '-\b'
+	[ $spinnercount = 3 ] && echo -ne '\\\b' 
+	[ $spinnercount = 4 ] && echo -ne '|\b'
+	[ $spinnercount -ge 4 ] && spinnercount=0
+	let spinnercount=spinnercount+1
+}
+
+# returns OK if $1 contains $2
+strstr() {
+  [ "${1#*$2*}" = "$1" ] && return 1
+  return 0
+}
+
+# An extra precaution when deploying to RL
+rl_confirm() {
+  if echo "${ENV}" | grep -iv "rldev" | grep -i -e "rl" -e "prod" ; then
+  	if [ ${RLCONFIRMED:=0} != 1 ]; then
+		while : ; do 
+		  warning "You are deploying to RL!"
+		  echo "Are you sure? (Y)es/(N)o [N]"
+		  read answer
+		  if strstr "yY" "$answer" ; then
+			#let's try to use this to keep from hitting this multiple times.  this SHOULD work
+			#as long as rl_config is called at the top level of a stack of scripts...
+			export RLCONFIRMED=1
+			verbose "RL now confirmed"
+			return 0
+		  elif strstr "nN" "$answer" || [ "$answer" = "" ] ; then
+			notice "Aborting RL deployment"
+			exit 1
+		  fi
+		done
+	else
+		verbose "RL already confirmed"
+	fi
+  else
+    return 0
+  fi
+}
+
+# Enforce that a specific user is being used to run the script(s)
+check_user() {
+	#quick and dirty workaround for $1 not being set w/ -u.  you can't "default" $1 w/ :=...
+  if echo "$SHELLOPTS" | grep -q "nounset"
+   then
+	local opts=nounset
+	set +u
+  fi
+  USER=${1}
+  if [ "x$opts" = "xnounset" ]
+   then
+	set -u	
+  fi
+  if [ -z ${USER} ]; then
+    USER="tw"
+  fi
+
+  # Are we running as the correct user?
+  if [ "$(id -u -n)" != "${USER}" ]; then
+    error "The deploy scripts must be run as the ${USER} user"
+    exit 1
+  fi
+}
+
+#check that we're not running as tw user.  we have plenty of things that cant be done as tw
+check_user_not_tw () {
+    CHKUSER="tw"
+  # Are we running as the correct user?
+  if [ "$(id -u -n)" = "${CHKUSER}" ]; then
+    error "This scriptmust not be be run as the ${USER} user"
+    exit 1
+  fi
+}
+
+
+#pretty (and linewrapped) usage output
+# showHelp "script name" "script description" "script author" "-o1 --option1" "option1 descr" "-o2 --opt2" "option2 descr"
+#ripped off from http://stuff.lhunath.com/bashlib
+## draistrick@ea.com 3/25/11 - fixed linewrap problems for long options by including the lenght of the option
+showHelp() {
+	##we're erroring because of -E inside here -somewhere-
+	#it was in the draw= and italics tputs, removed. 
+	trap_off
+	# Variables for terminal requests.
+	{
+	hide=$(     tput civis  || tput vi      )
+	show=$(     tput cvvis  || tput vs      )
+	save=$(     tput sc                     )
+	load=$(     tput rc                     )
+	bold=$(     tput bold   || tput md      )
+	reset=$(    tput sgr0   || tput me      )
+	#blink=$(   tput blink  || tput mb      ) #dont want
+	#italic=$(   tput sitm   || tput ZH      ) #doesnt work
+	red=$(      tput setaf 1|| tput AF 1    )
+	green=$(    tput setaf 2|| tput AF 2    )
+	yellow=$(   tput setaf 3|| tput AF 3    )
+	blue=$(     tput setaf 4|| tput AF 4    )
+	magenta=$(  tput setaf 5|| tput AF 5    )
+	cyan=$(     tput setaf 6|| tput AF 6    )
+	white=$(    tput setaf 7|| tput AF 7    )
+	default=$(  tput op                     )
+	eed=$(      tput ed     || tput cd      )   # Erase to end of display
+	eel=$(      tput el     || tput ce      )   # Erase to end of line
+	ebl=$(      tput el1    || tput cb      )   # Erase to beginning of line
+	ewl=$eel$ebl                                # Erase whole line
+	back=$'\b'
+	} 2>/dev/null ||:
+	
+	# Monochrome terminals don't need these.
+	[[ $TERM = *-m ]] && \
+		unset red= green= yellow= blue= magenta= cyan= white=
+
+    # Check usage.
+    [ $# -lt 3 ] && {
+        error 'Please provide the name, description, author and options' \
+                'of the application.'
+        return 1
+    }
+
+    # Parse the options.
+    local appName=$1; shift
+    local appDesc=${1//+([[:space:]])/ }; shift
+    local appAuthor=$1; shift
+    local cols=$(tput cols)
+    (( cols = ${cols:-80} - 10 ))
+
+    # Figure out what FD to use for our messages.
+    [[ -t 1 ]]; local fd=$(( $? + 1 ))
+   
+    # Print out the help header.
+    printf "$reset$bold\n"                                          >&$fd
+    printf "\t\t%s\n" "$appName"                                    >&$fd
+    printf "$reset\n"                                               >&$fd
+    printf "%s\n" "$appDesc" | fmt -w "$cols" | sed $'s/^/\t/'      >&$fd
+    printf "\t   $reset$bold~ $reset$bold%s\n" "$appAuthor"         >&$fd
+    printf "$reset\n"                                               >&$fd
+
+    # Print out the application options and columnize them.
+    while (( $# )); do
+        local optName=$1; shift
+        local optDesc=$1; shift
+        ## take the length of optName into account for EACH line to limit the width of each line
+		## need an extra margin of 5 for the whitespaces
+        (( linecols = ${cols:-80} - $(printf "    %s\t" "$optName"|wc -c) - 5 ))
+        printf "    %s\t" "$optName"
+        printf "%s\n" "${optDesc//+( )/ }" | fmt -w "$linecols" | sed $'1!s/^/ \t/'
+        printf "\n"
+    done | column -t -s $'\t' \
+         | sed "s/^\(    [^ ]*\)/$bold$green\1$reset/"              >&$fd
+    printf "\n"                                                     >&$fd
+    
+    #trap back on, if it was on.
+    cond_trap_on
+} # _____________________________________________________________________
+
+setupcommand() {
+	if [ x"${command:=}" = x ]; then
+		command="$(basename $0) ${ENV:=}"
+	fi 
+}
+
+verbose() {
+#deprecated
+	printverbose "$@"
+}
+printverbose() {
+	if [ ${VERBOSE:=0} = 1 ]; then
+		setupcommand
+		MSG=$@
+		[ "$BOOTUP" = "color" ] && $SETCOLOR_SUCCESS
+		echo -n "VERBOSE: "	
+		[ "$BOOTUP" = "color" ] && $SETCOLOR_NORMAL
+		echo -n "$command: "
+		echo "${MSG}"
+		return 0
+	fi
+}
+print() {
+	setupcommand
+	if [ $# -ge 1 ] ; then
+		[ "${1}" = "-n" ] && nowrap="-n" && shift
+	fi
+	echo ${nowrap:=} "$command: $@"
+	unset nowrap
+}
+err(){
+#deprecated
+	printerr "$@"
+
+}
+printerror() {
+	printerr "$@"
+}
+printerr() {
+	setupcommand
+	error "$command: $@"
+}
+printnotice(){
+	setupcommand
+	notice "$command: $@"
+}
+printwarning(){
+	setupcommand
+	warning "$command: $@"
+}
+testprint() {
+#deprecated
+	printtest "$@"
+	return $?
+}
+printtest() {
+	if [ x"${TEST:=}" != x ]; then
+		setupcommand		
+		MSG=$@
+		[ "$BOOTUP" = "color" ] && $SETCOLOR_WARNING
+		echo -n "TEST: "	
+		[ "$BOOTUP" = "color" ] && $SETCOLOR_NORMAL
+		echo -n "$command: "
+		echo -n ${MSG}
+		echo -ne "\r\n"
+		return 0
+	else
+		"$@"
+		return $?
+	fi
+}
+
+
+### TODO - figure out how to name this sanely!
+### this one sets us up for the selfdeploy DESTINATION - that is where we PUT our code
+setup_selfdeploy () {
+#if we're in self deploy mode
+#override $SERVERS and $DEST (or variations there on)
+#this causes the code to get copied to the deploy storage server
+#not the end server
+#then we'd trigger a selfdeploy after this.
+	if [ ${SELFDEPLOY:=0} -eq 1 ]; then
+	 if [ "${SELFDEPLOY_TYPE=x}" != "x" ]; then
+		if [ x"${SELFDEPLOY_SERVER:=}" != x ]; then
+			#default this if it isn't set.
+			[ "${SELFDEPLOY_PATH:=x}" = x ] && SELFDEPLOY_PATH="/deploy_store"
+			#hackery to support various other deploys until they get stdized
+			[ "${PUBLICFACING_DEST:=x}" = x  ] || DEST=${PUBLICFACING_DEST}
+			#blaze - this one might always need some magics.			
+			[ "${DEPLOY_PATH:=x}" = x  ] || DEST=""
+			
+			#echo "Setting up self deploy to ${SELFDEPLOY_SERVER}:${SELFDEPLOY_PATH}"
+			DEST="${SELFDEPLOY_PATH}/${ENV}/${SELFDEPLOY_TYPE}/${DEST}"
+			echo "Setting up self deploy to ${SELFDEPLOY_SERVER}:${DEST}"
+			SERVERS="${SELFDEPLOY_SERVER}"
+			
+			#now hackery for non-standarized variable names
+			[ "${PUBLICFACING_DEST:=x}" = x  ] || PUBLICFACING_DEST=${DEST}
+			[ "${PUBLICFACING_SERVERS:=x}" = x  ] || PUBLICFACING_SERVERS=${SERVERS}
+			[ "${DEPLOY_PATH:=x}" = x  ] || DEPLOY_PATH=${DEST}
+		 else
+			printerr "Sorry, self deploy cannot setup, SELFDEPLOY_SERVER is empty! Exiting!"
+			return 1			
+		 fi
+		else
+			printerr "Sorry, self deploy cannot setup, SELFDEPLOY_TYPE is empty! Exiting!"
+			return 1
+		fi
+	fi
+}
+
+
+### TODO - figure out how to name this sanely!
+#this one sets up SERVERS from the serverdb to be USED (by things like restart_, dbmig, importt2, etc)
+#this ONLY sets us up for -all servers- for an environment, not specifics.
+setup_selfdeploy_exec () {
+	#validate, in case we're called some other time
+	if [ ${SELFDEPLOY:=0} -eq 1 ]; then
+	#we're in selfdeploy
+	#get our list of servers
+	#then we'll do our work against that list of servers instead.
+		if [ $# -ge 1 ]; then
+			## 1 argument, layer, for tools that should NOT use the default layer
+			oLAYER=${LAYER}
+			LAYER=$1
+		fi	
+		if [ -z ${GAME:=""} ]; then
+			error "GAME is not set, exiting"
+			usage
+			exit $E_NO_ENV
+		fi
+		for include in /usr/local/bin/functions-serverdb
+		 do
+			if [  -e $include ]; then
+				. $include
+			else
+				err "missing ${include}! (fatal)" 
+				exit 1
+			fi
+		done
+	
+		#again, to reset anything that got hacked around by the selfdeploy server setup
+		#suck in our env's config
+		include_env_file $LAYER
+	
+		verbose "starting serverdb setup"
+		serverdb=$(getserversbyenv)
+		servers=$(getserversbycolumn selfdeployGroup serverdb)
+		if [ "x${servers}" = x ]; then
+			printerr "NO servers for ${ENV} found in serverdb!"
+			exit 1
+		fi
+		print "Starting setup_selfdeploy_exec for selfdeploy_type of ${SELFDEPLOY_TYPE}"
+		hosts=$(gethostsbytype ${SELFDEPLOY_TYPE} servers)
+		verbose "hosts are $hosts"
+		SERVERS=${hosts}
+		#hackyness to support things that havent standardized on $SERVERS yet
+		##!!!!! BE SURE THESE ARE NOT DEFINED IN THE CONFIGS!! the configs would override these...
+		PUBLICFACING_SERVERS=${SERVERS}
+		DBMIG_SERVER=${SERVERS}
+		MEMCACHED_SERVERS=${SERVERS}
+		if [ $# -ge 1 ]; then
+		## 1 argument, layer, for tools that should NOT use the default layer
+			export LAYER=${oLAYER}
+			#and refix this crap.
+			include_env_file $LAYER
+		fi
+	fi
+}
+
+### TODO - figure out how to name this sanely!
+do_selfdeploy () {
+#if we're in selfdeploy mode, trigger a selfdeploy
+	if [ ${SELFDEPLOY:=0} -eq 1 ]; then
+	 if [ "${SELFDEPLOY_TYPE=x}" != "x" ]; then
+		#the real meat.
+		$ENV_SCRIPT_DIR/deploy_selfdeploy -g ${GAME} -e ${ENV} -l ${LAYER} #$args
+		#to force us to not do this later, we'd like to get this out from above...maybe we can -source- the script.
+		PROSHOP_DB=0 #storefront upload
+		INSTALL=0 #blaze install
+		IMPORTT2=0 #blaze t2 import..
+		RESTART=0 #blaze restart
+
+	 else
+	 	echo "FAILED - SELFDEPLOY_TYPE cannot be empty!"
+	 	exit 1
+	 fi
+	else
+		echo -n #verbose ouput - not doing selfdeploy
+	fi
+}
+
+
+
+### TODO - figure out how to name this sanely!
+#######get servers for ENV in SELFDEPLOY_TYPE - defaults to LAYER's group, but can be passed specificly.
+setup_servers_serverdb () {
+	#validate, in case we're called some other time
+	if [ ${SELFDEPLOY:=0} -eq 1 ]; then
+	#we're in selfdeploy
+	#get our list of servers
+	#then we'll do our work against that list of servers instead.
+		verbose "we're in setup_servers_serverdb and going" 
+		if [ $# -ge 1 ]; then
+			## 1 argument, selfdeploy_type, for tools that should NOT use the default layer
+			oSELFDEPLOY_TYPE=${SELFDEPLOY_TYPE}
+			SELFDEPLOY_TYPE="$1"
+			verbose "setting SELFDEPLOY_TYPE to ${SELFDEPLOY_TYPE}"
+		fi	
+		if [ -z ${GAME:=""} ]; then
+			printerr "GAME is not set, exiting"
+			usage
+			exit $E_NO_ENV
+		fi
+		for include in /usr/local/bin/functions-serverdb
+		 do
+			if [  -e $include ]; then
+				. $include
+			else
+				printerr "missing ${include}! (fatal)" 
+				exit 1
+			fi
+		done
+		
+		verbose "starting serverdb setup"
+		serverdb=$(getserversbyenv)
+		servers=$(getserversbycolumn selfdeployGroup serverdb)
+		if [ "x${servers}" = x ]; then
+			printerr "NO servers for ${ENV} found in serverdb!"
+			exit 1
+		fi
+		print "Starting setup_servers_serverdb for selfdeploy_type of ${SELFDEPLOY_TYPE}"
+		hosts=$(gethostsbytype ${SELFDEPLOY_TYPE} servers)
+		verbose "hosts are $hosts"
+		SERVERS=${hosts}
+		#hackyness to support things that havent standardized on $SERVERS yet
+		PUBLICFACING_SERVERS=${SERVERS}
+		DBMIG_SERVER=${SERVERS}
+		MEMCACHED_SERVERS=${SERVERS}
+		if [ $# -ge 1 ]; then
+		## 1 argument, layer, for tools that should NOT use the default layer
+			SELFDEPLOY_TYPE=${oSELFDEPLOY_TYPE}
+#			#and refix this crap. though the above should do it, or the below should handle the above.
+#			include_env_file $LAYER
+			# Commenting the above line breaks ./restart_memcache -e $ENV -l blaze
+			# Does not get blaze memcache servers. Still tries to use regular memcache servers
+			# TODO: Figure out how to enable this without breaking everything else
+		fi
+	fi
+
+}
+
+
+setup_tty_out() {
+	if tty -s ; then
+		ttyout=/dev/tty
+	else
+		ttyout=/tmp/$$tty.tmp
+		verbose "no TTY, using $ttyout"
+	fi
+}
+print_tty_out(){
+	if [ $ttyout != /dev/tty ]; then
+		verbose "no TTY, printing $ttyout"
+		cat $ttyout
+		verbose "removing $ttyout"
+		rm $ttyout
+	fi
+}
+
+
+check_build_server(){
+	if [ x"${BUILD_SERVER:=}" = x ]; then
+		printerr "Sorry BUILD_SERVER must be set in ${ENV}_cfg"
+		exit 1
+	else
+		hostname=$(hostname)
+		if strstr ${hostname} ${BUILD_SERVER}; then
+			verbose "Confirmed BUILD_SERVER, ${BUILD_SERVER} = ${hostname}"
+		else
+			printerr "BUILD_SERVER must match hostname, ${BUILD_SERVER} != ${hostname}"
+			exit 1
+		fi
+	fi
+}
+
+
+##only use this one -last- after all the jobs are fired
+parallelwait() { 
+	if [ x"${parallel:=}" != x ]
+	 then
+		echo "waiting for parallel deploys...."
+		wait
+		wait
+		echo "parallel complete"
+	fi
+}
+
+
+
+### note - if your control-C these things, sane stuff does not happen.  someday maybe.  but I havent gotten the INT trap
+### to DTRT.
+parallel_run() {
+#generally goes BEFORE testprint - and doesn't work if you eval into it.
+	[[ -z ${PWAIT_TMP:=} ]] && export PWAIT_TMP=$(mktemp -d)
+	{
+		BASHPID=$(bash -c 'echo $PPID')  #find this subshell's pid..
+		##echo PWAIT_TMP is $PWAIT_TMP and $BASHPID and $$
+		trap_off
+		echo "$@" > $PWAIT_TMP/${BASHPID}.cmd
+		eval "$@"
+		exit=$?
+		echo $exit > $PWAIT_TMP/${BASHPID}.pid
+		if [[ $exit -gt 0 ]] 
+		 then
+			printerr "parallel job failure on $BASHPID"
+		fi
+	} &
+    #add the last background job to our pid list
+    pwait_pids="${pwait_pids:=} $!"
+}
+
+#use this one to slow down job creation, limiting to $1 threads at a time - you'll want parallelwait to wait on the last <$1 jobs
+parallel_wait_limiter() {
+##generally goes AFTER testprint, or no testprint at all.
+#..add some arg checking or..?
+	if [[ "x${pwait_pids:=}" == "x" ]]
+	 then
+	 	printerr "no pwait_pids in parallel_wait_limiter, did you call parallel_run first?"
+	 	return 1
+	fi
+    while [[ $(jobs -p | wc -l) -ge $1 ]]; do
+        usleep 500
+    done
+}
+
+#instead of parallelwait, use this last (only if you used _limit) because it handles failures..
+parallel_wait_checkexit() {
+	if [[ "x${pwait_pids:=}" == "x" ]]
+	 then
+	 	printerr "no pwait_pids in parallel_wait_checkexit, did you call parallel_run first?"
+	 	return 1
+	fi
+	
+	if [[ ! "x$PWAIT_TMP" == "x" ]]
+	then
+		#wait will return the exit code from the pids
+		#if any of them are nonzero, it'll return that..maybe
+		printverbose "waiting on jobs to finish so we can error test them"
+		#wait may error, so true it.
+		wait || true ##$pwait_pids - they're long gone if they finished, so this gets noisy.
+		printverbose "All jobs complete, testing for failures"
+		fails=0
+		if [[ $(ls -l $PWAIT_TMP/*.pid 2>/dev/null | wc -l)  -gt 0 ]]
+		 then
+			for exitfile in $PWAIT_TMP/*.pid
+			 do
+				code=$(cat $exitfile)
+				if [[ $code -gt 0 ]]
+				 then
+					let fails=fails+1
+					printerr "$exitfile has an error $code"
+					exitcmdfile=$(echo ${exitfile}|sed 's/.pid//g')
+					printerr "$exitfile job was $(cat ${exitcmdfile}.cmd)"
+				fi
+			done
+			if [[ $fails -gt 0 ]] 
+			 then
+				rm -r $PWAIT_TMP || true
+				printerr "We had parallel job failures on $fails of our jobs"
+				return 1
+			fi
+		else
+			[[ -d $PWAIT_TMP ]] && rm -r $PWAIT_TMP
+			printerr "PWAIT_TMP directory is empty (or missing, or or or)"
+		fi
+	else
+		rm -r $PWAIT_TMP || true
+		printerr "ERROR: PWAIT_TMP var was empty!"
+		return 1
+	fi
+
+	rm -r $PWAIT_TMP || true	
+	#now reset for the next time parallel_run gets called.
+	unset PWAIT_TMP
+	unset pwait_pids
+
+}
+
+
+
+parallel_wait_checkexit_condretry() {
+	exitcodes=$@
+	if [[ "x$exitcodes" == "x" ]]
+	 then
+		printerror "FAIL: this function needs exit codes to check for!"
+		return 1
+	fi
+	declare -a retryjobs
+	if [[ "x${pwait_pids:=}" == "x" ]]
+	 then
+	 	printerr "no pwait_pids in parallel_wait_checkexit_condretry, did you call parallel_run first?"
+	 	return 1
+	fi
+	
+	if [[ ! "x$PWAIT_TMP" == "x" ]]
+	then
+		#wait will return the exit code from the pids
+		#if any of them are nonzero, it'll return that..maybe
+		printverbose "waiting on jobs to finish so we can error test them"
+		#wait may error, so true it.
+		wait || true ##$pwait_pids - they're long gone if they finished, so this gets noisy.
+		printverbose "All jobs complete, testing for failures"
+		fails=0
+		if [[ $(ls -l $PWAIT_TMP/*.pid 2>/dev/null | wc -l)  -gt 0 ]]
+		 then
+			for exitfile in $PWAIT_TMP/*.pid
+			 do
+				code=$(cat $exitfile)
+				if [[ $code -gt 0 ]]
+				 then
+					let fails=fails+1
+					printerr "$exitfile has an error $code"
+					exitcmdfile=$(echo ${exitfile}|sed 's/.pid//g')
+					printerr "$exitfile job was $(cat ${exitcmdfile}.cmd)"
+					for testcode in $exitcodes
+					 do
+						if [[ $code == $testcode ]]
+						 then
+							jobcmd="$(cat ${exitcmdfile}.cmd)"
+							printnotice "Setting up $exitfile for retry"
+							printnotice "Command was $jobcmd"
+							retryjobs+=("$jobcmd")
+						fi
+					done
+				fi
+			done
+			if [[ $fails -gt 0 ]] 
+			 then
+				rm -r $PWAIT_TMP || true
+				printerr "We had parallel job failures on $fails of our jobs"
+				##return 1
+			fi
+		else
+			[[ -d $PWAIT_TMP ]] && rm -r $PWAIT_TMP
+			printerr "PWAIT_TMP directory is empty (or missing, or or or)"
+		fi
+	else
+		rm -r $PWAIT_TMP || true
+		printerr "ERROR: PWAIT_TMP var was empty!"
+		return 1
+	fi
+
+	rm -r $PWAIT_TMP || true	
+	#now reset for the next time parallel_run gets called.
+	unset PWAIT_TMP
+	unset pwait_pids
+
+	#now retry the retryables.
+	jobsnum=${#retryjobs[*]}   ##correct syntax. the link is wrong!
+	if [[ $jobsnum -gt 0 ]]
+	 then
+		for ((i=0;i<$jobsnum;i++))
+		 do
+			job="${retryjobs[${i}]}"
+			printnotice "Retrying $job"
+			printtest parallel_run $job 2>&1
+			printtest parallel_wait_limiter $PARALLELTHREADS
+		done
+		printnotice "waiting for any leftover retry threads"
+		##..we could call back to ourselves and try forever if we want..
+		printtest parallel_wait_checkexit
+		printnotice "done waiting for retrys, we did $loopcounter loops"
+	fi
+}
+
+
+
+
+
+
+
+do_dbmig() {
+	if [ ${DBMIG:=0} -eq 1 ]; then
+		if [ ${NODBMIG:=0} -eq 1 ]; then
+			print "Skipping DBMIG"
+		else
+			print "Deploying DBMIG: "
+			setup_tty_out
+			set -o pipefail
+			output="$(testprint ${ENV_SCRIPT_DIR}/deploy_dbmig -e ${ENV} --really-deploy-to-rl --layer ${LAYER} 2>&1 | tee $ttyout )"
+			result=$?
+			set +o pipefail
+			print_tty_out
+			if [ ${result} = 0 ]; then
+				verbose "DBMIG testing output for done"
+				if echo "${output:=none}" | grep -q "DBMIG successful and done!"; then
+					###we should probably have a better test...
+					verbose "DBMIG setting var so we dont try again"
+					NODBMIG=1
+				fi
+			else
+				echo_failure
+				error "DBMIG failed: ${result}"
+				exit 1
+			fi
+			print "Done with DBMIG"
+			output=""
+		fi
+	fi
+}
+
+
+do_crontab() {
+	if [ "x${CRONTAB:=}" != "x" ]; then
+		print "Deploying CRONTAB: "
+		setup_tty_out
+		set -o pipefail
+		output="$(testprint ${ENV_SCRIPT_DIR}/deploy_crontab -e ${ENV} --layer ${LAYER} 2>&1 | tee $ttyout )"
+		result=$?
+		set +o pipefail
+		print_tty_out
+		if [ ${result} = 0 ]; then
+			verbose "CRONTAB testing output for done"
+			if echo "${output:=none}" | grep -q "done!"; then
+				echo -n #quiet for now
+			fi
+		else
+			echo_failure
+			error "CRONTAB failed: ${result}"
+			exit 1
+		fi
+		print "Done with CRONTAB"
+		output=""
+	fi
+}
+

@@ -1,0 +1,74 @@
+#!/bin/bash
+
+
+# hacked up from
+# http://stackoverflow.com/a/12523979/3692967
+
+##if you dont want to use showHelp...
+
+usage() {
+###### U S A G E : Help and ERROR ######
+cat <<EOF
+ foobar $Options
+$*
+        Usage: foobar <[options]>
+        Options:
+                -b   --bar            Set bar to yes    ($foo)
+                -f   --foo            Set foo to yes    ($bart)
+                -h   --help           Show this message
+                -A   --arguments=...  Set arguments to yes ($arguments) AND get ARGUMENT ($ARG)
+                -B   --barfoo         Set barfoo to yes ($barfoo)
+                -F   --foobar         Set foobar to yes ($foobar)
+EOF
+}
+
+
+command=$(basename $0)
+usage(){
+  message="$* "
+  #use printf for portability
+  printf "\n  $message\n"
+  showHelp \
+  "${command}" \
+  "deploy and release tool!! for golf, for now." \
+  "draistrick@zynga.com" \
+  "REQUIRED"            "required args below" \
+  "-d/--deploy"         "deploy this."\
+  " OR "                ""\
+  "-r/--release"        "release this"\
+  "OPTIONAL"            "" \
+  "-h/--help"           "this usage message"\
+#  "-v/--verbose"        "enable verbose execution " \
+#  "-t/--test"           "don't actually execute anything "\
+
+} #end usage
+
+
+if [ $# = 0 ]; then (usage "  >>>>>>>> no options given "; exit 1); fi
+##################################################################
+#######  "getopts" with: short options  AND  long options  #######
+#######            AND  short/long arguments               #######
+while getopts ':drh-:' OPTION ; do
+  case "$OPTION" in
+    d  ) DEBUG=1                       ;;
+    r  ) RELEASE=1                       ;;
+    h  ) usage; exit 1                         ;;
+    -  ) [ $OPTIND -ge 1 ] && optind=$(expr $OPTIND - 1 ) || optind=$OPTIND
+         eval OPTION="\$$optind"
+         OPTARG=$(echo $OPTION | cut -d'=' -f2)
+         OPTION=$(echo $OPTION | cut -d'=' -f1)
+         case $OPTION in
+             --debug     ) DEBUG=1                       ;;
+             --release   ) RELEASE=1                  ;;
+             --help      ) usage; exit 1                         ;;
+             * )  usage " Long: >>>>>>>> invalide options (long) "; exit 1 ;;
+         esac
+       OPTIND=1
+       shift
+      ;;
+    ? )  usage "Short: >>>>>>>> invalide options (short) "; exit 1  ;;
+  esac
+done
+
+echo "debug: ${DEBUG:=0}"
+echo "release: ${RELEASE:=0}"

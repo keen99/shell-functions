@@ -1,0 +1,27 @@
+#!/bin/bash
+
+##some logic so we can capture the output to chef.log
+## -cron- already writes >> to the log, so we dont want double.
+## rightscale also writes to the log, too, and probably wont have a tty.
+#check if we have a tty outside the pipeline.
+if tty -s
+ then
+  HAVETTY=1
+else
+  HAVETTY=0
+fi
+check_tty_tee() {
+  if [[ ${HAVETTY:=0} == 1 ]]
+   then
+    cat - | tee $@
+    echo "tee to chef.log complete"
+  else
+    cat -
+    echo "Skipping log, no tty"
+    echo "skipped tee."
+  fi
+
+}
+
+
+# | check_tty_tee -a /var/log/chef/chef.log
