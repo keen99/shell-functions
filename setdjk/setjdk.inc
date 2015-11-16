@@ -66,7 +66,8 @@ function setjdk() {
     fi
 }
 function removeFromPath() {
-    export PATH=$(echo $PATH | sed -E -e "s;:$1;;" -e "s;$1:?;;")
+    #butt ugly, but because 2003 gnu sed doesnt have -E, just -r
+    export PATH=$( echo $PATH | sed -E -e "s;:$1;;" -e "s;$1:?;;" 2>/dev/null || echo $PATH | sed -r -e "s;:$1;;" -e "s;$1:?;;" )
 }
 
 setmvn() {
