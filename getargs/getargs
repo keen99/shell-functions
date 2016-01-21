@@ -43,8 +43,7 @@ usage(){
 
 } #end usage
 
-
-if [ $# = 0 ]; then (usage "  >>>>>>>> no options given "; exit 1); fi
+if [ $# = 0 ]; then usage "  >>>>>>>> no options given "; exit 1; fi
 ##################################################################
 #######  "getopts" with: short options  AND  long options  #######
 #######            AND  short/long arguments               #######

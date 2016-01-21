@@ -1,0 +1,120 @@
+#!/bin/bash
+
+
+command=$(basename $0)
+usage(){ showHelp \
+  "${command}" \
+  "builds jetty..." \
+  "EASODPlatformTeam@ea.com" \
+  "REQUIRED"          "required args below" \
+  "-e/--environment"      "environment config to use"\
+  "OPTIONAL"          "" \
+  "-l/--layer"        "layer to use (defaults to $LAYER)"\
+  "-P/--p4args [Arguments]" "Accepts any Perforce/p4 argument as part of the deploy, including @Changelist_number, which will sync to a particular changelist.  Note that when using Perforce/p4 flags, they should be single quoted to avoid confusion with this script's options, e.g.  -p4args '-f' will force a sync." \
+  "-S/--no-sync"        "Will prevent syncing of files to the server." \
+  "-c/--clean-build"      "force a clean build"\
+  "-C/--no-clean"       "prevents a clean build that would normally happen if the non-clean build failed." \
+  "-b/--force-build"      "Force Blaze to build, even if it normally would not." \
+  "-B/--no-build"       "Do NOT build Blaze, even if it normally would build." \
+  "-d/--force-deploy"     "Forces Blaze deploy to run the database migration and server restart." \
+  "-D/--no-deploy"      "Prevents the Blaze deploy from running the database migration and server restart." \
+  "-i/--force-install"    "Forces Blaze install script to run - newblaze only." \
+  "-I/--no-install"     "Forces Blaze install script to NOT run - newblaze only." \
+  "-r/--force-restart"      "Forces Blaze restart script to run - newblaze only." \
+  "-R/--no-restart"       "Forces Blaze restart script to NOT run - newblaze only" \
+  "-v/--verbose"        "enable verbose execution " \
+  "-t/--test"         "don't actually execute anything "\
+  "-h/--help"         "this!"\
+
+  ##message
+  echo "$*"
+  echo
+
+} #end usage
+
+
+
+
+#pretty (and linewrapped) usage output
+# showHelp "script name" "script description" "script author" "-o1 --option1" "option1 descr" "-o2 --opt2" "option2 descr"
+#ripped off from http://stuff.lhunath.com/bashlib
+## draistrick@ea.com 3/25/11 - fixed linewrap problems for long options by including the lenght of the option
+showHelp() {
+  ##we're erroring because of -E inside here -somewhere-
+  #it was in the draw= and italics tputs, removed.
+  trap_off 2>/dev/null || true
+  # Variables for terminal requests.
+  {
+  hide=$(     tput civis  || tput vi      )
+  show=$(     tput cvvis  || tput vs      )
+  save=$(     tput sc                     )
+  load=$(     tput rc                     )
+  bold=$(     tput bold   || tput md      )
+  reset=$(    tput sgr0   || tput me      )
+  #blink=$(   tput blink  || tput mb      ) #dont want
+  #italic=$(   tput sitm   || tput ZH      ) #doesnt work
+  red=$(      tput setaf 1|| tput AF 1    )
+  green=$(    tput setaf 2|| tput AF 2    )
+  yellow=$(   tput setaf 3|| tput AF 3    )
+  blue=$(     tput setaf 4|| tput AF 4    )
+  magenta=$(  tput setaf 5|| tput AF 5    )
+  cyan=$(     tput setaf 6|| tput AF 6    )
+  white=$(    tput setaf 7|| tput AF 7    )
+  default=$(  tput op                     )
+  eed=$(      tput ed     || tput cd      )   # Erase to end of display
+  eel=$(      tput el     || tput ce      )   # Erase to end of line
+  ebl=$(      tput el1    || tput cb      )   # Erase to beginning of line
+  ewl=$eel$ebl                                # Erase whole line
+  back=$'\b'
+  } 2>/dev/null ||:
+
+  # Monochrome terminals don't need these.
+  [[ $TERM = *-m ]] && \
+    unset red= green= yellow= blue= magenta= cyan= white=
+
+    # Check usage.
+    [ $# -lt 3 ] && {
+        error 'Please provide the name, description, author and options' \
+                'of the application.'
+        return 1
+    }
+
+    # Parse the options.
+    local appName=$1; shift
+    local appDesc=${1//+([[:space:]])/ }; shift
+    local appAuthor=$1; shift
+    local cols=$(tput cols)
+    (( cols = ${cols:-80} - 10 ))
+
+    # Figure out what FD to use for our messages.
+    [[ -t 1 ]]; local fd=$(( $? + 1 ))
+
+    # Print out the help header.
+    printf "$reset$bold\n"                                          >&$fd
+    printf "\t\t%s\n" "$appName"                                    >&$fd
+    printf "$reset\n"                                               >&$fd
+    printf "%s\n" "$appDesc" | fmt -w "$cols" | sed $'s/^/\t/'      >&$fd
+    printf "\t   $reset$bold~ $reset$bold%s\n" "$appAuthor"         >&$fd
+    printf "$reset\n"                                               >&$fd
+
+    # Print out the application options and columnize them.
+    while (( $# )); do
+        local optName=$1; shift
+        local optDesc=$1; shift
+        ## take the length of optName into account for EACH line to limit the width of each line
+    ## need an extra margin of 5 for the whitespaces
+        (( linecols = ${cols:-80} - $(printf "    %s\t" "$optName"|wc -c) - 5 ))
+        printf "    %s\t" "$optName"
+        printf "%s\n" "${optDesc//+( )/ }" | fmt -w "$linecols" | sed $'1!s/^/ \t/'
+        printf "\n"
+    done | column -t -s $'\t' \
+         | sed "s/^\(    [^ ]*\)/$bold$green\1$reset/"              >&$fd
+    printf "\n"                                                     >&$fd
+
+    #trap back on, if it was on.
+    cond_trap_on 2>/dev/null || true
+} # _____________________________________________________________________
+
+
+
+usage "error message"
