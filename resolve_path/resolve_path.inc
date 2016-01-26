@@ -86,3 +86,18 @@ resolve_path() {
 	cd "$owd"
 	return $retval
 }
+
+
+## possible alternative - might be better, might have other edge cases
+## from http://stackoverflow.com/a/22991587/3692967
+function realpath {
+    local r=$1; local t=$(readlink $r)
+    while [ $t ]; do
+        r=$(cd $(dirname $r) && cd $(dirname $t) && pwd -P)/$(basename $t)
+        t=$(readlink $r)
+    done
+    echo $r
+}
+
+#example usage
+## SCRIPT_PARENT_DIR=$(dirname $(realpath "$0"))/..
