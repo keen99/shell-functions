@@ -1,18 +1,16 @@
 #!/bin/bash
 
 
-
+set -e
 
 bashv=${BASH_VERSION%.*}; bmajorv=${bashv%.*}; bminorv=${bashv#*.}
-if [[ $bmajorv -lt 4 ]]
+if [[ $bmajorv -lt 3 ]]
  then
+  ##roughly off of the top of my head, this probably wont work with bash2...and maybe early versions of 3... definitely works with 3.2.57(1)-release
   echo "ERROR: "
-  echo "ERROR: bash version 4.x required, currently running with ${bashv:-empty}"
+  echo "ERROR: bash version 3.x required, currently running with ${bashv:-empty}"
   echo "ERROR: "
   exit 1
-#elif [[ $bminor -lt 3 ]]
-# then
-#    echo "less than 4.3"
 fi
 
 
@@ -56,17 +54,18 @@ parallel_run() {
   [[ -z ${PWAIT_TMP:=} ]] && export PWAIT_TMP=$(mktemp -d 2>/dev/null || mktemp -d -t 'ptmpdir')
   mkdir -p ${PWAIT_TMP}
   {
-    ##BASHPID is a special now, set it and shit blows up
+    ##BASHPID is a special now, set it and
+    shit blows up
     MYBASHPID=$(bash -c 'echo $PPID')  #find this subshell's pid..
     ##echo PWAIT_TMP is $PWAIT_TMP and $MYBASHPID and $$
-    trap_off
+    trap_off 2>/dev/null || true
     echo "$@" > $PWAIT_TMP/${MYBASHPID}.cmd
     eval "$@"
     exit=$?
     echo $exit > $PWAIT_TMP/${MYBASHPID}.pid
     if [[ $exit -gt 0 ]]
      then
-      printerr "parallel job failure on $MYBASHPID"
+      printerror "parallel job failure on $MYBASHPID"
     fi
   } &
     #add the last background job to our pid list
@@ -117,9 +116,10 @@ parallel_wait_checkexit() {
         if [[ $code -gt 0 ]]
          then
           let fails=fails+1
-          printerror "$exitfile has an error $code"
           exitcmdfile=$(echo ${exitfile}|sed 's/.pid//g')
-          printerror "$exitfile job was $(cat ${exitcmdfile}.cmd)"
+          jobid=$(basename "$exitcmdfile")
+          printerror "$jobid had an error: exit $code"
+          printerror "$jobid job was [ $(cat ${exitcmdfile}.cmd) ]"
         fi
       done
       if [[ $fails -gt 0 ]]

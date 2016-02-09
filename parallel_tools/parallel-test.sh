@@ -22,9 +22,9 @@ trap_on
 
 echo_and_sleep() {
 
-	echo "$@ start and sleep"
-	sleep 5
-	echo "$@ done sleep"
+  echo "$@ start and sleep"
+  sleep 5
+  echo "$@ done sleep"
 
 }
 
